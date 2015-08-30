@@ -6,6 +6,7 @@ use Proc::Daemon;
 use Getopt::Long;
 use GnuPG;
 use File::Basename;
+use File::Copy;
 use Amazon::S3;
 
 my $configuration_file = "/usr/local/scripts/thor.cfg";
@@ -16,7 +17,7 @@ my $pid_file = "/var/run/thor.pid";
 my $gpg_homedir = $config_hash->{gpg_homedir};
 my $gpg_recipient = $config_hash->{gpg_recipient};
 my $encrypted_dir = $config_hash->{encrypted_dir};
-my $archive_dir = $config_hash->{archive_dir};
+my $archived_dir = $config_hash->{archive_dir};
 my $aws_access_key_id = $config_hash->{aws_access_key_id};
 my $aws_secret_access_key = $config_hash->{aws_secret_access_key};
 
@@ -39,12 +40,14 @@ or die("Error in command line arguments\n");
 sub stop {
   if ($pid) {
     open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
-    print $logfh "Stopping thor with pid $pid...\n";
+    my $timestamp = localtime(time);
+    print $logfh "[$timestamp] Stopping thor with pid $pid...\n";
     close $logfh;
     $daemon->Kill_Daemon($pid_file);
   } else {
     open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
-    print $logfh "Thor already stopped...\n";
+    $timestamp = localtime(time);
+    print $logfh "[$timestamp] Thor already stopped...\n";
     close $logfh;
   }#end if
 }#end sub stop
@@ -52,18 +55,21 @@ sub stop {
 sub status {
   if ($pid) {
     open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
-    print $logfh "Running thor with pid $pid...\n";
+    my $timestamp = localtime(time);
+    print $logfh "[$timestamp] Running thor with pid $pid...\n";
     close $logfh;
+    print "[$timestamp] Running thor with pid $pid...\n";
   }#end if
 }#end sub status
 
 sub run {
   if (!$pid) {
       open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
-      print $logfh "About to initialize thor daemon...\n";
+      my $timestamp = localtime(time); 
+      print $logfh "[$timestamp] About to initialize thor daemon...\n";
       close $logfh;
 
-    #$daemon->Init;
+    $daemon->Init;
 
       my $notification = new Linux::Inotify2 or die "unable to watch $uploads_dir: $!";
       $notification->watch($uploads_dir, IN_CLOSE_WRITE, \&handle_new);
@@ -74,7 +80,8 @@ sub run {
     }
   } else {
     open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
-    print $logfh "Already running with pid $pid\n";
+    $timestamp = localtime(time);
+    print $logfh "[$timestamp] Already running with pid $pid\n";
     close $logfh;
   }#end if
 }#end sub run
@@ -82,18 +89,27 @@ sub run {
 sub handle_new {
   my $filename = shift;
   open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
-  print $logfh "Found " . $filename->fullname . "\n";
+  my $timestamp = localtime(time);
+  print $logfh "[$timestamp] Found " . $filename->fullname . "\n";
   close $logfh;
 
   my $result = encrypt_file($filename->fullname);
   open $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
-  print $logfh "Result of encryption: -->" . $result . "<--\n";
+  #print $logfh "Result of encryption: -->" . $result . "<--\n";
   close $logfh;
 
   if ($result) {
       open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
-      print $logfh "About to send " . $filename->fullname . ".gpg to s3\n";
+      $timestamp = localtime(time);
+      print $logfh "[$timestamp] Processing of " . $filename->fullname . " successful\n";
       close $logfh;
+      #unlink $filename->fullname or die "Could not unlink $filename->fullname: $!";
+  } else {
+      open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
+      $timestamp = localtime(time);
+      print $logfh "[$timestamp] Unable to encrypt  " . $filename->fullname . " $! or some other errors occurred\n";
+      close $logfh;
+      return 0;
   }#end if
 
 } #end sub handle_new
@@ -105,7 +121,8 @@ sub encrypt_file {
   my $encrypted_path = $encrypted_dir . "/" . $encrypted_file;
 
   open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
-  print $logfh "Encrypting " . $input_file . " to " . $encrypted_path . "\n";
+  my $timestamp = localtime(time);
+  print $logfh "[$timestamp] Encrypting " . $input_file . " to " . $encrypted_path . "\n";
   close $logfh;
 
   my $gpg = new GnuPG(
@@ -121,17 +138,19 @@ sub encrypt_file {
 
   if ($@) {
       open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
-      print $logfh "Unable to encrypt  " . $input_file . " to " . $encrypted_file . "$!\n";
+      $timestamp = localtime(time);
+      print $logfh "[$timestamp] Unable to encrypt  " . $input_file . " to " . $encrypted_file . "$!\n";
       close $logfh;
       return 0;
   } else {
       open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
-      print $logfh "Successfully encrypted  " . $input_file . " to " . $encrypted_file . "$!\n";
+      $timestamp = localtime(time);
+      print $logfh "[$timestamp] Successfully encrypted  " . $input_file . " to " . $encrypted_file . "\n";
       close $logfh;
   }#end else
 
-  send_to_s3($encrypted_path);
-
+  my $response = send_to_s3($encrypted_path);
+  return $response;
 } #end encrypt_file
 
 sub send_to_s3 {
@@ -140,7 +159,8 @@ sub send_to_s3 {
   my($filename, $filedir, $fileext) = fileparse($input_file);
 
   open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
-  print $logfh "Sending " . $input_file . " to s3...\n";
+  my $timestamp = localtime(time);
+  print $logfh "[$timestamp] Sending " . $input_file . " to s3...\n";
   close $logfh;
 
   my $s3 = Amazon::S3->new(
@@ -160,4 +180,58 @@ sub send_to_s3 {
     }
   );
 
+  if ( ! $response ) {
+      open $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
+      $timestamp = localtime(time);
+      print $logfh "[$timestamp] Unable to send " . $filename . " to s3...: $s3->errstr\n";
+      close $logfh;
+
+      return 0;
+  } else {
+      open $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
+      $timestamp = localtime(time);
+      print $logfh "[$timestamp] Successfully sent " . $filename . " to s3...\n";
+      close $logfh;
+
+      $response = clean_up($input_file);
+      return $response;
+  }#end else
+
+
 }#end send_to_s3
+
+sub clean_up {
+  my $input_file = shift;
+  open $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
+  my $timestamp = localtime(time);
+  print $logfh "[$timestamp] Cleaning up " . $input_file ."...\n";
+  close $logfh;
+
+  my($filename, $filedir, $fileext) = fileparse($input_file);
+  my $encrypted_path = $encrypted_dir . "/" . $filename;
+  my $archived_path = $archived_dir . "/" . $filename;
+
+
+  open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
+  $timestamp = localtime(time);
+  print $logfh "[$timestamp] Archiving " . $encrypted_path . " to " . $archived_path . "\n";
+  close $logfh;
+
+  my $result = move($encrypted_path, $archived_path);  
+
+  if ( ! $result ) {
+      open $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
+      $timestamp = localtime(time);
+      print $logfh "[$timestamp] Unable to archive " . $encrypted_path . " to ". $archived_path . "\n";
+      close $logfh;
+
+      return 0;
+  } else {
+      open $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
+      $timestamp = localtime(time);
+      print $logfh "[$timestamp] Successfully archived " . $encrypted_path . "\n";
+      close $logfh;
+
+      return $result;
+  }#end else
+}# end clean_up
