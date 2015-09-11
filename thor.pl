@@ -120,7 +120,7 @@ sub handle_new {
       $timestamp = localtime(time);
       print $logfh "[$timestamp] Processing of " . $filename->fullname . " successful\n";
       close $logfh;
-      #unlink $filename->fullname or die "Could not unlink $filename->fullname: $!";
+      unlink $filename->fullname or die "Could not unlink $filename->fullname: $!";
   } else {
       open my $logfh, ">>", $log_file or die "Can't open the log file $log_file: $!";
       $timestamp = localtime(time);
