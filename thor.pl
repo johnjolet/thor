@@ -80,7 +80,8 @@ sub run {
 
 #--- watch the uploads dir for any changes, then call the sub handle_new
       my $notification = new Linux::Inotify2 or die "unable to watch $uploads_dir: $!";
-      $notification->watch($uploads_dir, IN_CLOSE_WRITE, \&handle_new);
+      $notification->watch($uploads_dir, IN_MOVED_TO, \&handle_new);
+      #$notification->watch($uploads_dir, IN_CLOSE_WRITE, \&handle_new);
 
 #--- while 1==1, spin on a Inotify2 poll...poll the kernel for filesystem changes
 #    note that one a change is detected, the callback above is run...if we need to go multi-thread,
